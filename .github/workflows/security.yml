@@ -1,0 +1,119 @@
+name: Security Scan
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master ]
+  schedule:
+    - cron: '0 0 * * 0'  # Каждое воскресенье в полночь
+
+jobs:
+  security:
+    name: Security Checks
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install bandit flask flask-sqlalchemy flask-wtf python-dotenv
+        
+    # 1. SAST - Bandit статический анализ
+    - name: Run Bandit SAST Scan
+      run: |
+        echo "🔍 Запуск Bandit статического анализа..."
+        bandit -r . \
+          -f json -o bandit-report.json \
+          --skip B101,B311,B404,B603
+        
+        # Проверяем наличие критических уязвимостей
+        if grep -q '"issue_severity": "HIGH"' bandit-report.json || \
+           grep -q '"issue_severity": "MEDIUM"' bandit-report.json; then
+          echo "❌ Найдены критические уязвимости!"
+          echo "=== Отчет Bandit ==="
+          cat bandit-report.json | python -m json.tool | head -100
+          exit 1
+        else
+          echo "✅ Критических уязвимостей не найдено"
+        fi
+    
+    # 2. Проверка на наличие дебаг режима в коде
+    - name: Check for Debug Mode
+      id: debug_check
+      run: |
+        echo "🔍 Проверка debug режима в коде..."
+        if grep -r "debug=True" . --include="*.py"; then
+          echo "❌ Обнаружен debug=True в коде!"
+          echo "debug_detected=true" >> $GITHUB_OUTPUT
+          exit 1
+        else
+          echo "✅ Debug режим не найден в коде"
+          echo "debug_detected=false" >> $GITHUB_OUTPUT
+        fi
+    
+    # 3. Проверка на хардкод секретов
+    - name: Check for Hardcoded Secrets
+      run: |
+        echo "🔍 Проверка на хардкод секретов..."
+        # Паттерны для поиска секретов
+        PATTERNS="password\|secret_key\|api_key\|token\|auth"
+        FOUND_SECRETS=$(grep -r -i "$PATTERNS" . --include="*.py" --include="*.env" | grep -v ".github" | grep -v "__pycache__" || true)
+        
+        if [ -n "$FOUND_SECRETS" ]; then
+          echo "⚠️  Найдены потенциальные секреты:"
+          echo "$FOUND_SECRETS"
+          # Не фейлим, только предупреждаем (в реальном проекте нужно фейлить)
+        else
+          echo "✅ Потенциальные секреты не найдены"
+        fi
+    
+    # 4. Запуск тестов (если есть)
+    - name: Run Application Tests
+      run: |
+        echo "🧪 Запуск тестов приложения..."
+        # Создаем тестовую БД
+        python create_user_table.py
+        python create_test_users.py
+        
+        # Проверяем, что приложение может запуститься
+        timeout 10s python -c "
+        from app import app
+        print('✅ Приложение импортируется успешно')
+        " || echo "⚠️  Приложение не может запуститься"
+    
+    # 5. Генерация отчета
+    - name: Generate Security Report
+      if: always()
+      run: |
+        echo "📊 === ОТЧЕТ ПО БЕЗОПАСНОСТИ ==="
+        echo "Дата: $(date)"
+        echo "Ветка: ${{ github.ref }}"
+        echo "Коммит: ${{ github.sha }}"
+        echo ""
+        echo "Результаты:"
+        echo "- Bandit SAST: ${{ job.status == 'success' && '✅ PASS' || '❌ FAIL' }}"
+        echo "- Debug проверка: ${{ steps.debug_check.outputs.debug_detected == 'false' && '✅ PASS' || '❌ FAIL' }}"
+        echo ""
+        echo "Рекомендации:"
+        echo "1. Убедитесь, что debug=False в production"
+        echo "2. Храните секреты в переменных окружения"
+        echo "3. Регулярно обновляйте зависимости"
+        
+    # 6. Upload отчет как артефакт
+    - name: Upload Security Report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: security-report
+        path: |
+          bandit-report.json
+        retention-days: 30

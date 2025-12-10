@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Регистрация - {% if vulnerable %}Уязвимая{% else %}Безопасная{% endif %} версия</title>
+</head>
+<body>
+    <h2>Регистрация ({% if vulnerable %}УЯЗВИМАЯ{% else %}БЕЗОПАСНАЯ{% endif %} версия)</h2>
+    
+    {% with messages = get_flashed_messages() %}
+        {% if messages %}
+            <div class="flashes">
+                {% for message in messages %}
+                    <div class="flash">{{ message }}</div>
+                {% endfor %}
+            </div>
+        {% endif %}
+    {% endwith %}
+    
+    <form method="POST">
+        {{ form.csrf_token }}
+        <p>
+            {{ form.username.label }}<br>
+            {{ form.username(size=32) }}
+        </p>
+        <p>
+            {{ form.password.label }}<br>
+            {{ form.password(size=32) }}
+        </p>
+        <p>{{ form.submit() }}</p>
+    </form>
+    
+    {% if vulnerable %}
+        <p><a href="{{ url_for('login_vulnerable') }}">Вход</a></p>
+        <p><em>Эта версия уязвима к SQL-инъекциям!</em></p>
+    {% else %}
+        <p><a href="{{ url_for('login_secure') }}">Вход</a></p>
+    {% endif %}
+    
+    <p><a href="{{ url_for('index') }}">На главную</a></p>
+</body>
+</html>
