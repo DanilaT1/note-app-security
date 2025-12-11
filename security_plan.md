@@ -60,7 +60,31 @@ SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SECURE = False  # True в production
 SESSION_COOKIE_SAMESITE = 'Lax'
 PERMANENT_SESSION_LIFETIME = 1800  # 30 минут
+## 4. DevSecOps интеграция
 
+### 4.1 CI/CD Pipeline
+- **Триггеры**: push, pull_request, weekly schedule
+- **Проверки**:
+  1. **SAST**: Bandit статический анализ
+  2. **Secrets**: Проверка на хардкод секретов
+  3. **Config**: Проверка конфигурации безопасности
+  4. **Tests**: Базовые тесты приложения
+
+### 4.2 Правила мерджа
+1. ❌ **Блокировка** при обнаружении:
+   - Критических уязвимостей (Bandit HIGH)
+   - Debug режима в коде
+   - Явных SQL-инъекций
+
+2. ⚠️ **Предупреждение** при обнаружении:
+   - Средних уязвимостей (Bandit MEDIUM)
+   - Потенциальных секретов в коде
+   - Устаревших зависимостей
+
+### 4.3 Мониторинг и отчетность
+- Еженедельные автоматические сканы
+- Отчеты сохраняются как артефакты (30 дней)
+- Уведомления о критических уязвимостях
 # Отключение debug mode в production
 if __name__ == '__main__':
     app.run(debug=False)  # Важно для production!
