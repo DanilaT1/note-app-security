@@ -2,7 +2,7 @@
 # Демонстрационный файл с уязвимостями для тестирования CI/CD
 
 # Уязвимость 1: debug=True в production
-debug = True  # ❌ ЭТО ПЛОХО! Pipeline должен блокировать это
+debug = True  # ❌ ЭТО ПЛОХО! Pipeline должен блокировать    это
 
 # Уязвимость 2: SQL инъекция
 def vulnerable_login(username, password):
