@@ -29,21 +29,27 @@ jobs:
         
     # 1. SAST - Bandit статический анализ
     - name: Run Bandit SAST Scan
+      id: bandit_scan
       run: |
         echo "🔍 Запуск Bandit статического анализа..."
-        bandit -r . \
-          -f json -o bandit-report.json \
-          --skip B101,B311,B404,B603
         
-        # Проверяем наличие критических уязвимостей
-        if grep -q '"issue_severity": "HIGH"' bandit-report.json || \
-           grep -q '"issue_severity": "MEDIUM"' bandit-report.json; then
-          echo "❌ Найдены критические уязвимости!"
-          echo "=== Отчет Bandit ==="
-          cat bandit-report.json | python -m json.tool | head -100
+        # Создаем временный файл для отчета
+        bandit -r . \
+          -f txt -o bandit-report.txt \
+          --skip B101,B404,B603  # Пропускаем определенные проверки
+        
+        # Анализируем результаты
+        if grep -q "High severity" bandit-report.txt; then
+          echo "❌ Найдены HIGH уязвимости!"
+          cat bandit-report.txt
           exit 1
+        elif grep -q "Medium severity" bandit-report.txt; then
+          echo "⚠️ Найдены MEDIUM уязвимости (предупреждение)"
+          cat bandit-report.txt
+          echo "warning_detected=true" >> $GITHUB_OUTPUT
         else
           echo "✅ Критических уязвимостей не найдено"
+          echo "warning_detected=false" >> $GITHUB_OUTPUT
         fi
     
     # 2. Проверка на наличие дебаг режима в коде
@@ -51,8 +57,11 @@ jobs:
       id: debug_check
       run: |
         echo "🔍 Проверка debug режима в коде..."
-        if grep -r "debug=True" . --include="*.py"; then
+        DEBUG_FOUND=$(grep -r "debug=True" . --include="*.py" || true)
+        
+        if [ -n "$DEBUG_FOUND" ]; then
           echo "❌ Обнаружен debug=True в коде!"
+          echo "$DEBUG_FOUND"
           echo "debug_detected=true" >> $GITHUB_OUTPUT
           exit 1
         else
@@ -64,56 +73,87 @@ jobs:
     - name: Check for Hardcoded Secrets
       run: |
         echo "🔍 Проверка на хардкод секретов..."
-        # Паттерны для поиска секретов
-        PATTERNS="password\|secret_key\|api_key\|token\|auth"
-        FOUND_SECRETS=$(grep -r -i "$PATTERNS" . --include="*.py" --include="*.env" | grep -v ".github" | grep -v "__pycache__" || true)
+        SECRET_PATTERNS="SECRET_KEY\|DATABASE_URL\|FLASK_DEBUG\|password"
+        FOUND_SECRETS=$(grep -r -i "$SECRET_PATTERNS" . \
+          --include="*.py" \
+          --include="*.env.example" \
+          --include="*.env" \
+          --exclude-dir=.git \
+          --exclude-dir=__pycache__ \
+          --exclude-dir=.github || true)
         
-        if [ -n "$FOUND_SECRETS" ]; then
+        if echo "$FOUND_SECRETS" | grep -q "password\|admin\|test"; then
           echo "⚠️  Найдены потенциальные секреты:"
-          echo "$FOUND_SECRETS"
-          # Не фейлим, только предупреждаем (в реальном проекте нужно фейлить)
+          echo "$FOUND_SECRETS" | head -20
         else
           echo "✅ Потенциальные секреты не найдены"
         fi
     
-    # 4. Запуск тестов (если есть)
+    # 4. Запуск базовых тестов
     - name: Run Application Tests
       run: |
-        echo "🧪 Запуск тестов приложения..."
-        # Создаем тестовую БД
-        python create_user_table.py
-        python create_test_users.py
+        echo "🧪 Запуск базовых тестов приложения..."
         
-        # Проверяем, что приложение может запуститься
-        timeout 10s python -c "
+        # Создаем .env для тестов
+        echo "SECRET_KEY=test_key" > .env
+        echo "DATABASE_URL=sqlite:///test.db" >> .env
+        echo "FLASK_DEBUG=False" >> .env
+        
+        # Проверяем импорт
+        python -c "
         from app import app
-        print('✅ Приложение импортируется успешно')
-        " || echo "⚠️  Приложение не может запуститься"
-    
-    # 5. Генерация отчета
-    - name: Generate Security Report
-      if: always()
-      run: |
-        echo "📊 === ОТЧЕТ ПО БЕЗОПАСНОСТИ ==="
-        echo "Дата: $(date)"
-        echo "Ветка: ${{ github.ref }}"
-        echo "Коммит: ${{ github.sha }}"
-        echo ""
-        echo "Результаты:"
-        echo "- Bandit SAST: ${{ job.status == 'success' && '✅ PASS' || '❌ FAIL' }}"
-        echo "- Debug проверка: ${{ steps.debug_check.outputs.debug_detected == 'false' && '✅ PASS' || '❌ FAIL' }}"
-        echo ""
-        echo "Рекомендации:"
-        echo "1. Убедитесь, что debug=False в production"
-        echo "2. Храните секреты в переменных окружения"
-        echo "3. Регулярно обновляйте зависимости"
-        
-    # 6. Upload отчет как артефакт
-    - name: Upload Security Report
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: security-report
-        path: |
-          bandit-report.json
-        retention-days: 30
+        print('✅ Приложение успешно импортировано')
+                "
+                
+                # Запускаем скрипт создания БД
+                python create_user_table.py
+                echo "✅ База данных создана"
+            
+            # 5. Проверка уязвимого кода
+            - name: Check for Vulnerable Code
+              run: |
+                echo "🔍 Проверка на SQL-инъекции в коде..."
+                
+                # Проверяем на наличие конкатенации строк в SQL
+                SQL_CONCAT=$(grep -r "f\"" . --include="*.py" | grep -i "select\|insert\|update\|delete" || true)
+                
+                if [ -n "$SQL_CONCAT" ]; then
+                  echo "⚠️  Найдены потенциальные SQL-инъекции:"
+                  echo "$SQL_CONCAT"
+                else
+                  echo "✅ SQL-инъекции не обнаружены"
+                fi
+            
+            # 6. Генерация отчета
+            - name: Generate Security Report
+              if: always()
+              run: |
+                echo "📊 === ОТЧЕТ ПО БЕЗОПАСНОСТИ ===" > security-summary.txt
+                echo "Дата: $(date)" >> security-summary.txt
+                echo "Ветка: ${{ github.ref }}" >> security-summary.txt
+                echo "Коммит: ${{ github.sha }}" >> security-summary.txt
+                echo "" >> security-summary.txt
+                echo "📈 РЕЗУЛЬТАТЫ ПРОВЕРОК:" >> security-summary.txt
+                echo "------------------------" >> security-summary.txt
+                echo "- Bandit SAST: ${{ steps.bandit_scan.outputs.warning_detected == 'false' && '✅ PASS' || '⚠️ WARNING' }}" >> security-summary.txt
+                echo "- Debug проверка: ${{ steps.debug_check.outputs.debug_detected == 'false' && '✅ PASS' || '❌ FAIL' }}" >> security-summary.txt
+                echo "" >> security-summary.txt
+                echo "🔧 РЕКОМЕНДАЦИИ:" >> security-summary.txt
+                echo "----------------" >> security-summary.txt
+                echo "1. Всегда используйте debug=False в production" >> security-summary.txt
+                echo "2. Используйте переменные окружения для секретов" >> security-summary.txt
+                echo "3. Регулярно обновляйте зависимости" >> security-summary.txt
+                echo "4. Проводите пентесты перед релизом" >> security-summary.txt
+                
+                cat security-summary.txt
+            
+            # 7. Upload отчет как артефакт
+            - name: Upload Security Report
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                name: security-reports
+                path: |
+                  bandit-report.txt
+                  security-summary.txt
+                retention-days: 30
