@@ -58,7 +58,7 @@ jobs:
             bandit -r $(cat changed_files.txt) \
               -f html -o bandit-report.html \
               --skip B101,B404,B603,B105,B106,B107,B108 \
-              --severity-level high,medium \
+              --severity-level all \
               --confidence-level high,medium
           else
             echo "✅ Нет измененных Python файлов"
